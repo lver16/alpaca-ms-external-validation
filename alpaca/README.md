@@ -89,10 +89,4 @@ binary_predictions[, 2] <- as.integer((lesion_sums %% 4) >= 2)
 binary_predictions[, 3] <- as.integer(lesion_sums >= 4)
 ```
 
-**Bug 2: Typo `as.arry()` instead of `as.array()`**
-
-`as.arry(labeled_candidates)` causes a runtime error since `as.arry` does not exist in R.
-
-Fix: changed to `as.array(labeled_candidates)`.
-
 A pull request has been submitted to the ALPaCA authors. Until merged, use the corrected version provided here.
