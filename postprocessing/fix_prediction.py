@@ -1,31 +1,39 @@
 """
 fix_predictions.py
 
-For each subject in alpaca_out/:
+For each subject in the ALPaCA output directory:
   1. Creates an archive/ subfolder (only if it doesn't already exist)
   2. Copies the original predictions.csv and probabilities.csv to archive/
   3. Fixes a missing index column if present:
-       Correct format  → first column is unnamed (Unnamed: 0) with values 1,2,3,...
-       Bad format      → no index column at all; pandas assigns 0-based integers
+       Correct format  -> first column is unnamed (Unnamed: 0) with values 1,2,3,...
+       Bad format      -> no index column at all; pandas assigns 0-based integers
   4. Fixes discordant predictions in predictions.csv:
-       - V2=1 (PRL) but V1=0 (no Lesion) → set V2 to 0
-       - V3=1 (CVS) but V1=0 (no Lesion) → set V3 to 0
+       - V2=1 (PRL) but V1=0 (no Lesion) -> set V2 to 0
+       - V3=1 (CVS) but V1=0 (no Lesion) -> set V3 to 0
   5. Saves the corrected files in place
 
-Expected correct format (predictions_sub_001.csv template):
+Expected correct format (predictions.csv):
     ,V1,V2,V3
     1,1,1,0
     2,1,0,0
     ...
 
-Bad format (missing index column — pandas auto-assigns 0,1,2,...):
+Bad format (missing index column - pandas auto-assigns 0,1,2,...):
     "V1","V2","V3"
     0,0,0
     ...
 
 Usage:
-    python fix_predictions.py
-    python fix_predictions.py --alpaca_dir /linux/luverheyen/data/alpaca_out
+    python fix_predictions.py --alpaca_dir <alpaca_dir> [--dry_run]
+
+Arguments:
+    --alpaca_dir   Root directory containing one subfolder per subject
+                   (output directory of run_alpaca.R or run_flames_alpaca.R)
+    --dry_run      Print what would be changed without modifying any file
+
+Example:
+    python fix_predictions.py --alpaca_dir /data/alpaca_out
+    python fix_predictions.py --alpaca_dir /data/alpaca_out --dry_run
 """
 
 import pandas as pd
@@ -104,7 +112,7 @@ def fix_predictions(subject_dir: Path, archive_dir: Path, dry_run: bool) -> dict
     if not dry_run:
         archive_file(pred_path, archive_dir)
 
-        # Fix discordant predictions
+        # Fix discordant predictions: PRL or CVS predicted without Lesion
         df.loc[(df["V2"] == 1) & (df["V1"] == 0), "V2"] = 0
         df.loc[(df["V3"] == 1) & (df["V1"] == 0), "V3"] = 0
 
@@ -232,8 +240,9 @@ if __name__ == "__main__":
         description="Fix index column and discordant predictions in ALPaCA output files.")
     parser.add_argument(
         "--alpaca_dir",
-        default="/linux/luverheyen/data/alpaca_out",
-        help="Root directory with one subfolder per subject")
+        required=True,
+        help="Root directory containing one subfolder per subject "
+             "(output of run_alpaca.R or run_flames_alpaca.R)")
     parser.add_argument(
         "--dry_run", action="store_true",
         help="Print what would be changed without modifying any file")
