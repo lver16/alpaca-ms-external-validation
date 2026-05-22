@@ -1,75 +1,166 @@
+"""
+box_plot.py
+-------------------------------------------------------------------------------
+Description:
+    Generates boxplots comparing segmentation metrics between two models
+    (ALPaCA vs APRL, or MIMoSA vs FLaMeS), or for a single model alone.
+    Each metric is displayed as a separate subplot with jittered subject-level
+    points, mean diamond markers, and Wilcoxon/Mann-Whitney p-value annotations
+    when comparing two models.
+
+    Input Excel files are expected to be the outputs of summarize_metrics.py,
+    specifically the sheet "lesion_selected_metrics".
+
+Usage:
+    # Compare two models (ALPaCA vs APRL)
+    python box_plot.py --target prl --comp aprl --prl_suffix _PRL_ref
+
+    # Compare two models (MIMoSA vs FLaMeS)
+    python box_plot.py --target lesion --comp flames --prl_suffix ""
+
+    # Single model only
+    python box_plot.py --target prl --comp aprl --prl_suffix _PRL_ref \\
+            --single_model alpaca
+
+    # Custom input directory
+    python box_plot.py --target prl --comp aprl --prl_suffix _PRL_ref \\
+            --input_dir /data/results
+
+Arguments:
+    --target        Target type: "lesion" or "prl" (required)
+    --comp          Comparison model: "flames" or "aprl" (required)
+    --prl_suffix    PRL suffix used in folder names:
+                    "" , "_PRL_pred", or "_PRL_ref" (default: "_PRL_ref")
+    --single_model  Plot a single model instead of comparing two:
+                    "alpaca", "flames", or "aprl" (default: None, plots both)
+    --input_dir     Root directory containing the output_comp/ folder
+                    (default: current working directory)
+    --output_dir    Directory where output figures will be saved
+                    (default: boxplot_outputs/)
+
+Notes:
+    - Metrics are always displayed as percentages (multiplied by 100)
+    - Random seed is fixed at 42 for reproducible jitter
+"""
+
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 from scipy import stats
 
-# =========================================================
-# SETTINGS
-# =========================================================
+# -----------------------------------------------------------------------------
+# Parse command-line arguments
+# -----------------------------------------------------------------------------
+parser = argparse.ArgumentParser(
+    description="Generate boxplots comparing segmentation metrics between two models."
+)
+parser.add_argument(
+    "--target", required=True,
+    choices=["lesion", "prl"],
+    help="Target type: 'lesion' or 'prl'"
+)
+parser.add_argument(
+    "--comp", required=True,
+    choices=["flames", "aprl"],
+    help="Comparison model: 'flames' or 'aprl'"
+)
+parser.add_argument(
+    "--prl_suffix", default="_PRL_ref",
+    choices=["", "_PRL_pred", "_PRL_ref"],
+    help="PRL suffix used in folder names (default: '_PRL_ref')"
+)
+parser.add_argument(
+    "--single_model", default=None,
+    choices=["alpaca", "flames", "aprl"],
+    help="Plot a single model only instead of comparing two (default: None)"
+)
+parser.add_argument(
+    "--input_dir", default=".",
+    help="Root directory containing the output_comp/ folder (default: current directory)"
+)
+parser.add_argument(
+    "--output_dir", default="boxplot_outputs",
+    help="Directory where output figures will be saved (default: boxplot_outputs/)"
+)
+args = parser.parse_args()
 
-target = "prl" # "lesion" or "prl"
+target       = args.target
+comp         = args.comp
+PRL          = args.prl_suffix
+single_model = args.single_model
+input_dir    = Path(args.input_dir)
+output_dir   = Path(args.output_dir)
 
-comp = "aprl" # "flames" or "aprl"
+# -----------------------------------------------------------------------------
+# Fixed settings
+# -----------------------------------------------------------------------------
+as_percentage = True   # metrics are always displayed as percentages
+np.random.seed(42)     # fixed seed for reproducible jitter
 
-PRL = "_PRL_ref"  # "" or "_PRL_pred" or "_PRL_ref" (si PRL != "", utilise que target = "prl")
-
-# ── NEW: set to None to plot both models (original behaviour)
-#         set to "alpaca", "flames", or "aprl" to plot a single model
-single_model = None   # e.g. "alpaca" | "flames" | "aprl" | None
-
-
-alpaca_excel = Path(f"output_comp/alpaca_metrics_with_wo_CLU{PRL}/processed/metrics_summary_{target}_comparison.xlsx")
+# -----------------------------------------------------------------------------
+# Build input file paths from arguments
+# -----------------------------------------------------------------------------
+alpaca_excel = input_dir / f"output_comp/alpaca_metrics_with_wo_CLU{PRL}/processed/metrics_summary_{target}_comparison.xlsx"
 
 if "flames" in comp:
-    comp_excel = Path(f"output_comp/alpaca_metrics_with_wo_CLU_{comp}{PRL}/processed/metrics_summary_{target}_comparison.xlsx")
-else: 
-    comp_excel = Path(f"output_comp/aprl_metrics_with_wo_CLU_50{PRL}/processed/metrics_summary_{target}_comparison.xlsx")
-    
-sheet_name = f"lesion_selected_metrics"
+    comp_excel = input_dir / f"output_comp/alpaca_metrics_with_wo_CLU_{comp}{PRL}/processed/metrics_summary_{target}_comparison.xlsx"
+else:
+    comp_excel = input_dir / f"output_comp/aprl_metrics_with_wo_CLU_50{PRL}/processed/metrics_summary_{target}_comparison.xlsx"
+
+sheet_name = "lesion_selected_metrics"
+
+# Validate input files
+for path, name in [(alpaca_excel, "alpaca_excel"), (comp_excel, "comp_excel")]:
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found: {path} ({name})")
+
+output_dir.mkdir(exist_ok=True)
+
+# -----------------------------------------------------------------------------
+# Define metrics to plot
+# -----------------------------------------------------------------------------
 
 # Full dataset metrics
 metrics_full = ["PQ", "DSC", "nDSC", "F1", "Recall", "Precision"]
 
 # CLU metrics
-metrics_clu = ["F1_CLU", "Recall_CLU", "Precision_CLU"]
+metrics_clu  = ["F1_CLU", "Recall_CLU", "Precision_CLU"]
 
-metrics_all = metrics_full + metrics_clu
+metrics_all  = metrics_full + metrics_clu
 
-# Multiply by 100 for display
-as_percentage = True
+# -----------------------------------------------------------------------------
+# Build output file paths
+# -----------------------------------------------------------------------------
+save_path_all = output_dir / f"boxplots_all_metrics_alpaca_vs_{comp}_{target}_50{PRL}.pdf"
 
-# Output files
-output_dir = Path("boxplot_outputs")
-output_dir.mkdir(exist_ok=True)
-
-save_path_full = output_dir / f"boxplots_full_dataset_alpaca_vs_{comp}{PRL}"
-save_path_clu  = output_dir / f"boxplots_CLU_alpaca_vs_{comp}{PRL}"
-save_path_all  = output_dir / f"boxplots_all_metrics_alpaca_vs_{comp}_{target}_50{PRL}"
-
-# Reproducible jitter
-np.random.seed(42)
-
-# =========================================================
-# LOAD DATA
-# =========================================================
+# -----------------------------------------------------------------------------
+# Load data
+# -----------------------------------------------------------------------------
 df_alpaca = pd.read_excel(alpaca_excel, sheet_name=sheet_name)
 df_comp   = pd.read_excel(comp_excel,   sheet_name=sheet_name)
 
 df_alpaca.columns = [str(c).strip() for c in df_alpaca.columns]
 df_comp.columns   = [str(c).strip() for c in df_comp.columns]
 
-# =========================================================
-# HELPERS
-# =========================================================
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
 def get_available_metrics(df1, df2, metrics):
+    """Return metrics present in both dataframes (or just df1 in single-model mode)."""
     if df2 is None:
         return [m for m in metrics if m in df1.columns]
     return [m for m in metrics if m in df1.columns and m in df2.columns]
 
 
 def add_pvalue(ax, vals1, vals2, y_max, as_pct):
-    # p-value requires two groups — skip entirely in single-model mode
+    """
+    Annotate the plot with a significance marker (* / ** / ***).
+    Skipped automatically in single-model mode (vals2 is None).
+    Uses Wilcoxon signed-rank test for paired samples, Mann-Whitney otherwise.
+    """
     if vals2 is None:
         return
 
@@ -88,7 +179,7 @@ def add_pvalue(ax, vals1, vals2, y_max, as_pct):
     elif p < 0.05:
         p_str = "*"
     else:
-        return  # ns: don't annotate
+        return  # not significant: skip annotation
 
     y_min    = min(vals1.min() if len(vals1) > 0 else 0,
                    vals2.min() if len(vals2) > 0 else 0)
@@ -107,7 +198,8 @@ def add_pvalue(ax, vals1, vals2, y_max, as_pct):
 
 def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
     """
-    df2 = None  →  single-model plot (df1 only).
+    Build and save a multi-panel boxplot figure.
+    df2=None triggers single-model mode (df1 only, no p-values).
     """
     single = df2 is None
     available_metrics = get_available_metrics(df1, df2, metrics)
@@ -134,16 +226,16 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
     blue = "#4C9ED9"
     red  = "#D94B4B"
 
-    # Determine labels
+    # Determine model labels and dot colors
     if single:
         if single_model == "alpaca":
-            labels = ["ALPaCA"]
+            labels     = ["ALPaCA"]
             dot_colors = [blue]
         elif single_model == "flames":
-            labels = ["FLAMeS"]
+            labels     = ["FLAMeS"]
             dot_colors = [red]
-        else:  # "aprl"
-            labels = ["APRL"]
+        else:
+            labels     = ["APRL"]
             dot_colors = [red]
     else:
         if "flames" in comparison:
@@ -158,6 +250,7 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
         vals1 = pd.to_numeric(df1[metric], errors="coerce").dropna()
         vals2 = pd.to_numeric(df2[metric], errors="coerce").dropna() if not single else None
 
+        # Convert to percentage
         if as_percentage:
             vals1 = vals1 * 100
             if vals2 is not None:
@@ -165,6 +258,7 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
 
         data_to_plot = [vals1] if single else [vals1, vals2]
 
+        # Draw boxplots
         box = ax.boxplot(
             data_to_plot,
             labels=labels,
@@ -175,11 +269,10 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
             capprops=dict(color="black", linewidth=1.1),
             boxprops=dict(color="black", linewidth=1.1),
         )
-
         for b in box["boxes"]:
             b.set_facecolor("white")
 
-        # Jittered subject-level points
+        # Jittered subject-level points and mean diamond markers
         jitter_strength = 0.06
         for xi, (vals, color) in enumerate(zip(data_to_plot, dot_colors), start=1):
             x_jitter = np.random.normal(loc=xi, scale=jitter_strength, size=len(vals))
@@ -188,6 +281,7 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
                 ax.scatter(xi, vals.mean(), marker="D", s=35, color="red",
                            edgecolor="black", linewidth=0.7, zorder=4)
 
+        # Axis styling
         metric_title = metric.replace("_CLU", r"$^{CLU}$")
         ax.set_title(metric_title, fontsize=15, fontweight="bold")
         ax.grid(axis="y", alpha=0.25)
@@ -199,41 +293,41 @@ def make_boxplot_figure(df1, df2, metrics, title, save_path, comparison):
         else:
             ax.set_ylabel(metric)
 
-        # p-value (skipped automatically when vals2 is None)
+        # p-value annotation (skipped automatically in single-model mode)
         y_max = vals1.max() if len(vals1) > 0 else 0
         if vals2 is not None and len(vals2) > 0:
             y_max = max(y_max, vals2.max())
-        add_pvalue(ax, vals1.values, vals2.values if vals2 is not None else None, y_max, as_percentage)
+        add_pvalue(ax, vals1.values,
+                   vals2.values if vals2 is not None else None,
+                   y_max, as_percentage)
 
+    # Remove unused subplot panels
     for j in range(n_metrics, len(axes)):
         fig.delaxes(axes[j])
 
     fig.suptitle(title, fontsize=18, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
-
     print(f"Saved figure to: {save_path}")
 
 
-# =========================================================
-# RESOLVE df2 AND TITLES BASED ON single_model
-# =========================================================
-
+# -----------------------------------------------------------------------------
+# Resolve dataframes and title based on single_model argument
+# -----------------------------------------------------------------------------
 if single_model is not None:
-    # Pick the right dataframe and build a title / save path
     if single_model == "alpaca":
-        df1_plot = df_alpaca
+        df1_plot    = df_alpaca
         model_label = "ALPaCA"
     elif single_model == "flames":
-        df1_plot = df_comp   # flames output is in comp_excel when comp == "flames"
+        df1_plot    = df_comp
         model_label = "FLAMeS"
-    else:  # "aprl"
-        df1_plot = df_comp
+    else:
+        df1_plot    = df_comp
         model_label = "APRL"
 
-    df2_plot   = None
-    tit_all    = f"Full comparison: {model_label}"
-    save_path_all_pdf = (output_dir / f"boxplots_all_metrics_{single_model}_{target}{PRL}").with_suffix(".pdf")
+    df2_plot  = None
+    tit_all   = f"Full comparison: {model_label}"
+    save_path_all = (output_dir / f"boxplots_all_metrics_{single_model}_{target}{PRL}").with_suffix(".pdf")
 
 else:
     df1_plot = df_alpaca
@@ -244,18 +338,14 @@ else:
     else:
         tit_all = "Full comparison: ALPaCA vs APRL"
 
-    save_path_all_pdf = save_path_all.with_suffix(".pdf")
-
-
-# =========================================================
-# PLOTS
-# =========================================================
-
+# -----------------------------------------------------------------------------
+# Generate plot
+# -----------------------------------------------------------------------------
 make_boxplot_figure(
     df1_plot,
     df2_plot,
     metrics_all,
     title=tit_all,
-    save_path=save_path_all_pdf,
+    save_path=save_path_all,
     comparison=comp,
 )
